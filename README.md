@@ -4,4 +4,4 @@
 Jianfeng Xia(jxia11), Cheng Hu(chenghu3)
 
 ## Environment
-Go 1.11.4
+Go 1.11.5
