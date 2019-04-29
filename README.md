@@ -9,3 +9,6 @@ Go 1.11.5
 ## Ref:
 https://github.com/zhuolikevin/CS425-MP3-Distributed-Transaction
 https://github.com/bbhopesh/CS425-Distributed-Systems-Machine-Problems
+
+## Problems:
+1. Two clients initialize objects with same key?
