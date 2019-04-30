@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 
 	"../shared"
@@ -134,7 +135,12 @@ func (server *Server) WriterLock(args *shared.Args, reply *string) error {
 			}
 		}
 	} else {
-		// Write lock is hold by other, wait for releasing of writer lock(No need to consider readers)
+		// Write lock is hold by other, wait for releasing of writer lock (There should be 0 readers)
+		if obj.Readers.Size() != 0 {
+			fmt.Println("Reader-Writer Conflict!")
+			obj.m.Unlock()
+			return errors.New("Write: Object key=" + args.Key + ", Transaction=" + args.TransactionID + ". Reader-writer conflict.")
+		}
 		req := NewLockRequest("write", args.TransactionID)
 		obj.RequestQueue = append(obj.RequestQueue, req)
 		obj.m.Unlock()
@@ -161,12 +167,38 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 		return nil
 	}
 
-	if obj.Writer != "" {
-		// Writer is writing, append to queue
-
+	obj.m.Lock()
+	if obj.Writer != "" && obj.Readers.Size() == 0 {
+		// No reader/writer, grant
+		obj.Readers.SetAdd(args.TransactionID)
+		*reply = "SUCCESS"
+		obj.m.Unlock()
+	} else if obj.Readers.Size() > 0 && obj.Writer == "" {
+		// Has readers, no writer
+		// Grant only if no queued writer (writer-preferring RW lock)
+		if len(obj.RequestQueue) == 0 {
+			obj.Readers.SetAdd(args.TransactionID)
+			*reply = "SUCCESS"
+			obj.m.Unlock()
+		} else {
+			req := NewLockRequest("read", args.TransactionID)
+			obj.RequestQueue = append(obj.RequestQueue, req)
+			obj.m.Unlock()
+		}
+	} else if obj.Readers.Size() == 0 && obj.Writer != "" {
+		// No readers, has writer
+		req := NewLockRequest("read", args.TransactionID)
+		obj.RequestQueue = append(obj.RequestQueue, req)
+		obj.m.Unlock()
 	} else {
-		// if len(obj.RequestQueue) > 0
+		// Both readers and writers, conflict
+		if obj.Readers.Size() != 0 {
+			fmt.Println("Reader-Writer Conflict!")
+		}
+		obj.m.Unlock()
+		return errors.New("Read: Object key=" + args.Key + ", Transaction=" + args.TransactionID + ". Reader-writer conflict.")
 	}
+
 	return nil
 }
 
