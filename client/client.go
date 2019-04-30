@@ -163,6 +163,7 @@ func handleGet(client *Client, command []string) {
 			reply := makeRPCRequest("Read", server, key, "", transactionID)
 			// Read lock is granted
 			if strings.HasPrefix(reply, "SUCCESS") {
+				client.ReadLockSet.SetAdd(server + "." + key)
 				content := strings.Split(reply, " ")
 				fmt.Println(content[1] + " = " + content[2])
 			} else if strings.HasPrefix(reply, "ABORT") {
