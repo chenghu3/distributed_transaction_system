@@ -76,7 +76,9 @@ func StartClient(name string) {
 			case "SET":
 				handleSet(client, command)
 			case "GET":
+				handleGet(client, command)
 			case "COMMIT":
+				handleCommit()
 			default:
 				fmt.Println("Invalid command: " + rawCommand)
 			}
@@ -102,6 +104,11 @@ func handleSet(client *Client, command []string) {
 		server := strings.Split(command[1], ".")[0]
 		key := strings.Split(command[1], ".")[1]
 		value := command[2]
+		// check pass in server value
+		if _, present := ServerMap[server]; !present {
+			fmt.Println("System doesn't have requested server!")
+			return
+		}
 		// Check tentiveWrite
 		if _, present := client.TentativeWrite[server]; !present {
 			client.TentativeWrite[server] = make(map[string]string)
@@ -110,6 +117,7 @@ func handleSet(client *Client, command []string) {
 		// no need to make RPC call, just write to local tentiveWrite
 		if _, present := client.TentativeWrite[server][key]; present {
 			client.TentativeWrite[server][key] = value
+			fmt.Println("OK")
 		} else {
 			// Make Synchronous RPC call to acquire lock, block client code until receive apply
 			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
@@ -118,16 +126,64 @@ func handleSet(client *Client, command []string) {
 			// Write lock is granted
 			if reply == "SUCCESS" {
 				client.TentativeWrite[server][key] = value
+				fmt.Println("OK")
 			} else if reply == "ABORT" {
 				handleAbort()
 			} else {
-				fmt.Println("Unknown server reply!")
+				fmt.Println("Unknown server reply: " + reply)
 			}
 		}
 	}
 }
 
-func handleAbort() {}
+func handleGet(client *Client, command []string) {
+	if client.IsAborted {
+		fmt.Println("Abort")
+	} else if !client.IsTransacting {
+		fmt.Println("Transaction is not initiated.")
+	} else if len(command) != 2 {
+		fmt.Println("Invalid command: " + strings.Join(command, " "))
+	} else {
+		// Parse Command
+		server := strings.Split(command[1], ".")[0]
+		key := strings.Split(command[1], ".")[1]
+		// check pass in server value
+		if _, present := ServerMap[server]; !present {
+			fmt.Println("System doesn't have requested server!")
+			return
+		}
+		// if key is present is our local tentiveWrite, means client already has the write lock of that object,
+		// no need to make RPC call, just return the current value in local storage
+		if v, present := client.TentativeWrite[server][key]; present {
+			fmt.Println(command[1] + " = " + v)
+		} else {
+			// Make Synchronous RPC call to acquire lock, block client code until receive apply
+			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+			// Blocking call
+			reply := makeRPCRequest("Read", server, key, "", transactionID)
+			// Read lock is granted
+			if strings.HasPrefix(reply, "SUCCESS") {
+				content := strings.Split(reply, " ")
+				fmt.Println(content[1] + " = " + content[2])
+			} else if strings.HasPrefix(reply, "ABORT") {
+				handleAbort()
+			} else if strings.HasPrefix(reply, "NOT FOUND") {
+				handleAbort()
+			} else {
+				fmt.Println("Unknown server reply: " + reply)
+			}
+		}
+	}
+}
+
+func handleCommit() {
+	fmt.Println("COMMIT OK")
+}
+
+// NOT FOUND do not need to print "ABORTED"
+func handleAbort() {
+	fmt.Println("ABORTED")
+}
 
 func makeRPCRequest(action string, server string, key string, value string, transactionID string) string {
 	serverAddrr := ServerMap[server]
@@ -139,46 +195,21 @@ func makeRPCRequest(action string, server string, key string, value string, tran
 	var reply string
 	switch action {
 	case "TryPut":
-		rpcClient.Call("Server.WriterLock", args, &reply)
+		err = rpcClient.Call("Server.WriterLock", args, &reply)
 	case "Put":
-		rpcClient.Call("Server.Put", args, &reply)
+		err = rpcClient.Call("Server.Put", args, &reply)
 	case "Read":
-		rpcClient.Call("Server.Read", args, &reply)
+		err = rpcClient.Call("Server.Read", args, &reply)
 	case "Commit":
-		rpcClient.Call("Server.Commit", args, &reply)
+		err = rpcClient.Call("Server.Commit", args, &reply)
 	case "Abort":
-		rpcClient.Call("Server.Abort", args, &reply)
+		err = rpcClient.Call("Server.Abort", args, &reply)
 	default:
 		fmt.Println("Unknown rpc request type!")
+	}
+	if err != nil {
+		log.Fatal("Server error:", err)
 	}
 	rpcClient.Close()
 	return reply
 }
-
-// func run() {
-// 	// server
-// 	arith := new(shared.Arith)
-// 	rpc.Register(arith)
-// 	rpc.HandleHTTP()
-// 	l, e := net.Listen("tcp", ":8888")
-// 	if e != nil {
-// 		log.Fatal("listen error:", e)
-// 	}
-// 	go http.Serve(l, nil)
-
-// 	// client
-// 	serverAddress := "sp19-cs425-g10-02.cs.illinois.edu"
-// 	client, err := rpc.DialHTTP("tcp", serverAddress+":8888")
-// 	if err != nil {
-// 		log.Fatal("dialing:", err)
-// 	}
-
-// 	// Synchronous call
-// 	args := &server.Args{A: 7, B: 8}
-// 	var reply int
-// 	err = client.Call("Arith.Multiply", args, &reply)
-// 	if err != nil {
-// 		log.Fatal("arith error:", err)
-// 	}
-// 	fmt.Printf("Arith: %d*%d=%d", args.A, args.B, reply)
-// }

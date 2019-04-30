@@ -150,6 +150,9 @@ func (server *Server) WriterLock(args *shared.Args, reply *string) error {
 }
 
 // Read : Get Read lock of the corresponding object and send back read value if read clock is acquired.
+// @Reply: 1. SUCCESS + res => grant read lock and send back read value, seperate by " ", example: "SUCCESS A.h 5"
+//         2. NOT FOUND => No request object is found, client should abort the transacion
+// 		   3. ABORT => server decied to abort the transaction due to deadlock
 func (server *Server) Read(args *shared.Args, reply *string) error {
 	obj, found := server.Objects[args.Key]
 
