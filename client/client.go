@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"../shared"
 )
@@ -31,6 +32,7 @@ type Client struct {
 	TentativeWrite       map[string]map[string]string
 	ReadLockSet          *shared.StringSet
 	BlockedOperationChan chan bool
+	lock                 sync.RWMutex
 }
 
 func newClient(name string) *Client {
@@ -59,6 +61,7 @@ func StartClient(name string) {
 			}
 			if string(command) == "ABORT" {
 				// potential race condition
+				// Fix with protected IsAborted variable
 				handleAbort(client, false)
 			} else {
 				client.Commands.Push(string(command))
@@ -89,14 +92,22 @@ func StartClient(name string) {
 
 func handleBegin(client *Client) {
 	client.IsTransacting = true
+	client.lock.Lock()
+	client.IsAborted = false
+	client.lock.Unlock()
 	fmt.Println("OK")
 	// TODO: talk to coordinator
 }
 
 func handleSet(client *Client, command []string) {
+	client.lock.RLock()
 	if client.IsAborted {
-		fmt.Println("Abort")
-	} else if !client.IsTransacting {
+		fmt.Println("Transaction is aborted, Please restart a new Transaction")
+		client.lock.RUnlock()
+		return
+	}
+	client.lock.RUnlock()
+	if !client.IsTransacting {
 		fmt.Println("Transaction is not initiated.")
 	} else if len(command) != 3 {
 		fmt.Println("Invalid command: " + strings.Join(command, " "))
@@ -138,9 +149,13 @@ func handleSet(client *Client, command []string) {
 }
 
 func handleGet(client *Client, command []string) {
+	client.lock.RLock()
 	if client.IsAborted {
-		fmt.Println("Abort")
-	} else if !client.IsTransacting {
+		fmt.Println("Transaction is aborted, Please restart a new Transaction")
+		client.lock.RUnlock()
+		return
+	}
+	if !client.IsTransacting {
 		fmt.Println("Transaction is not initiated.")
 	} else if len(command) != 2 {
 		fmt.Println("Invalid command: " + strings.Join(command, " "))
@@ -181,6 +196,14 @@ func handleGet(client *Client, command []string) {
 
 // 1. Actually write 2. Release write lock 3. Release read lock and Clear up 4. increment transactionCount
 func handleCommit(client *Client) {
+	client.lock.RLock()
+	if client.IsAborted {
+		fmt.Println("Transaction is aborted, Please restart a new Transaction")
+		client.lock.RUnlock()
+		return
+	}
+	client.lock.RUnlock()
+
 	client.IsTransacting = false
 	for server, storage := range client.TentativeWrite {
 		for key, value := range storage {
@@ -200,15 +223,25 @@ func handleCommit(client *Client) {
 // NOT FOUND do not need to print "ABORTED"
 // User Abort: talk to all server to release lock, clear all tentative write
 // 				if there is any blocking request, server will send Abort mesg to unblock
-// Serve Abort:
+// Serve Abort: no race, happend in main thread
 func handleAbort(client *Client, isNotFound bool) {
-	// TODO: race
+	client.lock.RLock()
 	// Abort is in action, do nothing
+	// This case only will happen when user abort because one request is blocked,
+	// and later the blocked request receive abort mesg from server:
+	//		case1: this happen during user abort, will be ignored
+	// 		case2: after user abort, new transaction can't happend until this block call is resovled
+	// 				and the abort mesg will be ignored as well
 	if client.IsAborted {
+		client.lock.RUnlock()
 		return
 	}
+	client.lock.RUnlock()
 	client.IsTransacting = false
+	// change IsAborted, lock it
+	client.lock.Lock()
 	client.IsAborted = true
+	client.lock.Unlock()
 	for server, storage := range client.TentativeWrite {
 		for key := range storage {
 			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
