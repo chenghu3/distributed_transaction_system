@@ -2,6 +2,7 @@ package shared
 
 import (
 	"math/rand"
+	"net"
 	"sync"
 )
 
@@ -85,4 +86,79 @@ func (set *StringSet) GetRandom() string {
 		i--
 	}
 	panic("never!!")
+}
+
+// ************************************* //
+// *****  CommandQueue defination ****** //
+// ************************************* //
+
+// CommandQueue is queue of client command (thread-safe)
+type CommandQueue struct {
+	Commands []string
+	lock     sync.RWMutex
+}
+
+// NewQueue creates a new CommandQueue
+func NewQueue() *CommandQueue {
+	q := new(CommandQueue)
+	q.Commands = make([]string, 0)
+	return q
+}
+
+// Push adds an commannd to the end of the queue
+func (q *CommandQueue) Push(c string) {
+	q.lock.Lock()
+	q.Commands = append(q.Commands, c)
+	q.lock.Unlock()
+}
+
+// Pop removes an Item from the start of the queue
+func (q *CommandQueue) Pop() string {
+	q.lock.Lock()
+	res := q.Commands[0]
+	q.Commands = q.Commands[1:len(q.Commands)]
+	q.lock.Unlock()
+	return res
+}
+
+// IsEmpty returns true if the queue is empty
+func (q *CommandQueue) IsEmpty() bool {
+	return len(q.Commands) == 0
+}
+
+// Size returns the number of Items in the queue
+func (q *CommandQueue) Size() int {
+	return len(q.Commands)
+}
+
+// Clear empty the queue
+func (q *CommandQueue) Clear() {
+	q.lock.Lock()
+	q.Commands = make([]string, 0)
+	q.lock.Unlock()
+}
+
+// Args : argument for rpc calls
+type Args struct {
+	Key           string
+	Value         string // Value ignored in GET commands
+	TransactionID string
+}
+
+// GetLocalIP returns the non loopback local IP of the host
+// Reference https://stackoverflow.com/questions/23558425/how-do-i-get-the-local-ip-address-in-go
+func GetLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, address := range addrs {
+		// check the address type and if it is not a loopback the display it
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return ""
 }

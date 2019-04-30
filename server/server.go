@@ -7,11 +7,13 @@ import (
 	"../shared"
 )
 
+// Server Node
 type Server struct {
 	ID      string
 	Objects map[string]Object
 }
 
+// NewServer : Server Node constructor
 func NewServer(id string) *Server {
 	server := new(Server)
 	server.ID = id
@@ -19,6 +21,7 @@ func NewServer(id string) *Server {
 	return server
 }
 
+// Object : single object in server
 type Object struct {
 	Value        string
 	Readers      *shared.StringSet // Transaction ID
@@ -27,6 +30,7 @@ type Object struct {
 	m            sync.Mutex
 }
 
+// NewObject : Server Object constructor
 func NewObject(value string) *Object {
 	object := new(Object)
 	object.Value = value
@@ -36,12 +40,14 @@ func NewObject(value string) *Object {
 	return object
 }
 
+// LockRequest : single request for requiring a lock
 type LockRequest struct {
 	Type          string // read, write, upgrade
 	TransactionID string
 	Channel       chan bool // granted, abort
 }
 
+// NewLockRequest : LockRequest constructor
 func NewLockRequest(t string, tid string) *LockRequest {
 	req := new(LockRequest)
 	req.Type = t
@@ -50,14 +56,8 @@ func NewLockRequest(t string, tid string) *LockRequest {
 	return req
 }
 
-type Args struct {
-	Key           string
-	Value         string // Value ignored in GET commands
-	TransactionID string
-}
-
 // ReleaseLock : release lock on object for transaction
-func (server *Server) ReleaseLock(args *Args, reply *string) error {
+func (server *Server) ReleaseLock(args *shared.Args, reply *string) error {
 	obj, found := server.Objects[args.Key]
 	if !found {
 		return errors.New("ReleaseLock: Object key=" + args.Key + " not found")
@@ -76,13 +76,8 @@ func (server *Server) ReleaseLock(args *Args, reply *string) error {
 	return nil
 }
 
-// func (server *Server) ReleaseAllLocks(args *Args, reply *string) error {
-
-// 	return nil
-// }
-
-// WriterLock : Get exclusive lock to object
-func (server *Server) WriterLock(args *Args, reply *string) error {
+// WriterLock : Get Write lock of the corresponding object
+func (server *Server) WriterLock(args *shared.Args, reply *string) error {
 	obj, found := server.Objects[args.Key]
 
 	// New object immediately gets writer access
@@ -92,25 +87,26 @@ func (server *Server) WriterLock(args *Args, reply *string) error {
 	}
 
 	obj.m.Lock()
+	// No Writer
 	if obj.Writer == "" {
+		// No reader/writer, immediately grant
 		if obj.Readers.Size() == 0 {
-			// No reader/writer, immediately grant
 			obj.Writer = args.TransactionID
 			*reply = "SUCCESS"
 			obj.m.Unlock()
-			return nil
 		} else {
 			// No writer, has readers
+			// Client transaction is already reading,
 			if obj.Readers.SetHas(args.TransactionID) {
-				// Transaction is already reading
+				// Client transaction is the only reader
 				if obj.Readers.Size() == 1 {
 					// Immediately Promote
 					obj.Writer = args.TransactionID
 					obj.Readers.SetDelete(args.TransactionID)
 					*reply = "SUCCESS"
 					obj.m.Unlock()
-					return nil
 				} else {
+					// Client transaction is not the only reader
 					// Wait until transaction is the only reader, then promote
 					req := NewLockRequest("promote", args.TransactionID)
 					obj.RequestQueue = append([]*LockRequest{req}, obj.RequestQueue...) // Prepend to queue
@@ -122,10 +118,9 @@ func (server *Server) WriterLock(args *Args, reply *string) error {
 					} else {
 						*reply = "ABORT"
 					}
-					return nil
 				}
 			} else {
-				// Transaction is not reader, wait for writer lock
+				// Client transaction is not reader, wait for releasing of all read locks
 				req := NewLockRequest("write", args.TransactionID)
 				obj.RequestQueue = append(obj.RequestQueue, req)
 				obj.m.Unlock()
@@ -136,11 +131,10 @@ func (server *Server) WriterLock(args *Args, reply *string) error {
 				} else {
 					*reply = "ABORT"
 				}
-				return nil
 			}
 		}
 	} else {
-		// Transaction is not reader, wait for writer lock
+		// Write lock is hold by other, wait for releasing of writer lock(No need to consider readers)
 		req := NewLockRequest("write", args.TransactionID)
 		obj.RequestQueue = append(obj.RequestQueue, req)
 		obj.m.Unlock()
@@ -151,20 +145,12 @@ func (server *Server) WriterLock(args *Args, reply *string) error {
 		} else {
 			*reply = "ABORT"
 		}
-		return nil
 	}
-
-	obj.m.Unlock()
-
 	return nil
 }
 
-// func (server *Server) TryGet(args *Args, reply *string) error {
-
-// 	return nil
-// }
-
-func (server *Server) ReaderLock(args *Args, reply *string) error {
+// Read : Get Read lock of the corresponding object and send back read value if read clock is acquired.
+func (server *Server) Read(args *shared.Args, reply *string) error {
 	obj, found := server.Objects[args.Key]
 
 	if !found {
@@ -182,20 +168,20 @@ func (server *Server) ReaderLock(args *Args, reply *string) error {
 }
 
 // Set : Perform the update (on commit)
-func (server *Server) Set(args *Args, reply *string) error {
+// func (server *Server) Set(args *shared.Args, reply *string) error {
 
-	return nil
-}
+// 	return nil
+// }
 
-func (server *Server) Commit(args *Args, reply *string) error {
+// func (server *Server) Commit(args *shared.Args, reply *string) error {
 
-	return nil
-}
+// 	return nil
+// }
 
-func (server *Server) Abort(args *Args, reply *string) error {
+// func (server *Server) Abort(args *shared.Args, reply *string) error {
 
-	return nil
-}
+// 	return nil
+// }
 
 // type Quotient struct {
 // 	Quo, Rem int
