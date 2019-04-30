@@ -123,12 +123,9 @@ func (q *CommandQueue) Pop() string {
 
 // IsEmpty returns true if the queue is empty
 func (q *CommandQueue) IsEmpty() bool {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
 	return len(q.Commands) == 0
-}
-
-// Size returns the number of Items in the queue
-func (q *CommandQueue) Size() int {
-	return len(q.Commands)
 }
 
 // Clear empty the queue

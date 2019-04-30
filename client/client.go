@@ -58,7 +58,8 @@ func StartClient(name string) {
 				log.Fatal(err)
 			}
 			if string(command) == "ABORT" {
-				handleAbort()
+				// potential race condition
+				handleAbort(client, false)
 			} else {
 				client.Commands.Push(string(command))
 			}
@@ -78,7 +79,7 @@ func StartClient(name string) {
 			case "GET":
 				handleGet(client, command)
 			case "COMMIT":
-				handleCommit()
+				handleCommit(client)
 			default:
 				fmt.Println("Invalid command: " + rawCommand)
 			}
@@ -128,7 +129,7 @@ func handleSet(client *Client, command []string) {
 				client.TentativeWrite[server][key] = value
 				fmt.Println("OK")
 			} else if reply == "ABORT" {
-				handleAbort()
+				handleAbort(client, false)
 			} else {
 				fmt.Println("Unknown server reply: " + reply)
 			}
@@ -167,9 +168,10 @@ func handleGet(client *Client, command []string) {
 				content := strings.Split(reply, " ")
 				fmt.Println(content[1] + " = " + content[2])
 			} else if strings.HasPrefix(reply, "ABORT") {
-				handleAbort()
+				handleAbort(client, false)
 			} else if strings.HasPrefix(reply, "NOT FOUND") {
-				handleAbort()
+				fmt.Println("NOT FOUND")
+				handleAbort(client, true)
 			} else {
 				fmt.Println("Unknown server reply: " + reply)
 			}
@@ -177,13 +179,63 @@ func handleGet(client *Client, command []string) {
 	}
 }
 
-func handleCommit() {
+// 1. Actually write 2. Release write lock 3. Release read lock and Clear up 4. increment transactionCount
+func handleCommit(client *Client) {
+	client.IsTransacting = false
+	for server, storage := range client.TentativeWrite {
+		for key, value := range storage {
+			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+			// Blocking call, actually write to server
+			makeRPCRequest("Put", server, key, value, transactionID)
+			// release write lock
+			// TODO: consider just it in PUT?
+			makeRPCRequest("Release", server, key, "", transactionID)
+		}
+	}
+	clearUpAndReleaseRead(client)
+	client.TransactionCount++
 	fmt.Println("COMMIT OK")
 }
 
 // NOT FOUND do not need to print "ABORTED"
-func handleAbort() {
-	fmt.Println("ABORTED")
+// User Abort: talk to all server to release lock, clear all tentative write
+// 				if there is any blocking request, server will send Abort mesg to unblock
+// Serve Abort:
+func handleAbort(client *Client, isNotFound bool) {
+	// TODO: race
+	// Abort is in action, do nothing
+	if client.IsAborted {
+		return
+	}
+	client.IsTransacting = false
+	client.IsAborted = true
+	for server, storage := range client.TentativeWrite {
+		for key := range storage {
+			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+			// release write lock
+			makeRPCRequest("Release", server, key, "", transactionID)
+		}
+	}
+	clearUpAndReleaseRead(client)
+	if !isNotFound {
+		fmt.Println("ABORTED")
+	}
+}
+
+// clear up client local storage and release read lock for the case of commit and abort
+func clearUpAndReleaseRead(client *Client) {
+	// release all readLock
+	for _, lockInfo := range client.ReadLockSet.SetToArray() {
+		transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+		server := strings.Split(lockInfo, ".")[0]
+		key := strings.Split(lockInfo, ".")[1]
+		makeRPCRequest("Release", server, key, "", transactionID)
+	}
+	// clear tentative write, readLockInfo and commandQueue
+	client.TentativeWrite = make(map[string]map[string]string)
+	client.ReadLockSet = shared.NewSet()
+	client.Commands.Clear()
+	// TODO: Clear up to coordinator
 }
 
 func makeRPCRequest(action string, server string, key string, value string, transactionID string) string {
@@ -201,12 +253,10 @@ func makeRPCRequest(action string, server string, key string, value string, tran
 		err = rpcClient.Call("Server.Put", args, &reply)
 	case "Read":
 		err = rpcClient.Call("Server.Read", args, &reply)
-	case "Commit":
-		err = rpcClient.Call("Server.Commit", args, &reply)
-	case "Abort":
-		err = rpcClient.Call("Server.Abort", args, &reply)
+	case "Release":
+		err = rpcClient.Call("Server.ReleaseLock", args, &reply)
 	default:
-		fmt.Println("Unknown rpc request type!")
+		fmt.Println("Unknown rpc request type: " + action)
 	}
 	if err != nil {
 		log.Fatal("Server error:", err)
