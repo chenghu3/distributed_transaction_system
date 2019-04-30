@@ -63,16 +63,22 @@ func (server *Server) ReleaseLock(args *shared.Args, reply *string) error {
 	if !found {
 		return errors.New("ReleaseLock: Object key=" + args.Key + " not found")
 	}
+
+	obj.m.Lock()
 	isReader := obj.Readers.SetDelete(args.TransactionID)
+
 	isWriter := obj.Writer == args.TransactionID
 	if !isReader && !isWriter {
+		obj.m.Unlock()
 		return errors.New("ReleaseLock: Object key=" + args.Key + " not locked by transaction " + args.TransactionID)
 	}
 	if isWriter {
 		obj.Writer = ""
 	}
+	obj.m.Unlock()
 	*reply = "SUCCESS"
-	// TODO: Grant lock to next request(s) in queue
+
+	// Grant lock to next request(s) in queue
 
 	return nil
 }
@@ -171,25 +177,39 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 	if obj.Writer != "" && obj.Readers.Size() == 0 {
 		// No reader/writer, grant
 		obj.Readers.SetAdd(args.TransactionID)
-		*reply = "SUCCESS"
+		*reply = "SUCCESS " + server.ID + "." + args.Key + " " + obj.Value
 		obj.m.Unlock()
 	} else if obj.Readers.Size() > 0 && obj.Writer == "" {
 		// Has readers, no writer
 		// Grant only if no queued writer (writer-preferring RW lock)
 		if len(obj.RequestQueue) == 0 {
 			obj.Readers.SetAdd(args.TransactionID)
-			*reply = "SUCCESS"
+			*reply = "SUCCESS " + server.ID + "." + args.Key + " " + obj.Value
 			obj.m.Unlock()
 		} else {
 			req := NewLockRequest("read", args.TransactionID)
 			obj.RequestQueue = append(obj.RequestQueue, req)
 			obj.m.Unlock()
+			// Wait for grant/abort
+			ok := <-req.Channel
+			if ok {
+				*reply = "SUCCESS " + server.ID + "." + args.Key + " " + obj.Value
+			} else {
+				*reply = "ABORT"
+			}
 		}
 	} else if obj.Readers.Size() == 0 && obj.Writer != "" {
 		// No readers, has writer
 		req := NewLockRequest("read", args.TransactionID)
 		obj.RequestQueue = append(obj.RequestQueue, req)
 		obj.m.Unlock()
+		// Wait for grant/abort
+		ok := <-req.Channel
+		if ok {
+			*reply = "SUCCESS " + server.ID + "." + args.Key + " " + obj.Value
+		} else {
+			*reply = "ABORT"
+		}
 	} else {
 		// Both readers and writers, conflict
 		if obj.Readers.Size() != 0 {
