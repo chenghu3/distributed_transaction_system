@@ -75,10 +75,46 @@ func (server *Server) ReleaseLock(args *shared.Args, reply *string) error {
 	if isWriter {
 		obj.Writer = ""
 	}
-	obj.m.Unlock()
 	*reply = "SUCCESS"
 
-	// Grant lock to next request(s) in queue
+	// Read or write
+	if obj.Readers.Size() == 0 && obj.Writer == "" && len(obj.RequestQueue) > 0 {
+		// Grant lock to next request(s) in queue
+		if obj.RequestQueue[0].Type == "read" {
+			// Grant all consecutive reader locks
+			for len(obj.RequestQueue) > 0 && obj.RequestQueue[0].Type == "read" {
+				req := obj.RequestQueue[0]
+				obj.RequestQueue = obj.RequestQueue[1:]
+				obj.Readers.SetAdd(req.TransactionID)
+				req.Channel <- true
+			}
+		} else {
+			// Type is write
+			req := obj.RequestQueue[0]
+			obj.RequestQueue = obj.RequestQueue[1:]
+			obj.Writer = req.TransactionID
+			req.Channel <- true
+		}
+	}
+
+	// Promote
+	if obj.Readers.Size() == 1 && obj.Writer == "" && len(obj.RequestQueue) > 0 {
+		req := obj.RequestQueue[0]
+		if req.Type == "promote" {
+			if req.TransactionID == obj.Readers.GetRandom() {
+				// Same transaction, promote
+				obj.RequestQueue = obj.RequestQueue[1:]
+				obj.Readers.SetDelete(req.TransactionID)
+				obj.Writer = req.TransactionID
+				req.Channel <- true
+			} else {
+				obj.m.Unlock()
+				return errors.New("ReleaseLock: deadlock while trying to promote")
+			}
+		}
+	}
+
+	obj.m.Unlock()
 
 	return nil
 }
