@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"../shared"
 )
@@ -31,6 +32,7 @@ type Client struct {
 	TentativeWrite       map[string]map[string]string
 	ReadLockSet          *shared.StringSet
 	BlockedOperationChan chan bool
+	lock                 sync.RWMutex
 }
 
 func newClient(name string) *Client {
@@ -58,7 +60,9 @@ func StartClient(name string) {
 				log.Fatal(err)
 			}
 			if string(command) == "ABORT" {
-				handleAbort()
+				// potential race condition
+				// Fix with protected IsAborted variable
+				handleAbort(client, false)
 			} else {
 				client.Commands.Push(string(command))
 			}
@@ -78,7 +82,7 @@ func StartClient(name string) {
 			case "GET":
 				handleGet(client, command)
 			case "COMMIT":
-				handleCommit()
+				handleCommit(client)
 			default:
 				fmt.Println("Invalid command: " + rawCommand)
 			}
@@ -88,14 +92,22 @@ func StartClient(name string) {
 
 func handleBegin(client *Client) {
 	client.IsTransacting = true
+	client.lock.Lock()
+	client.IsAborted = false
+	client.lock.Unlock()
 	fmt.Println("OK")
 	// TODO: talk to coordinator
 }
 
 func handleSet(client *Client, command []string) {
+	client.lock.RLock()
 	if client.IsAborted {
-		fmt.Println("Abort")
-	} else if !client.IsTransacting {
+		fmt.Println("Transaction is aborted, Please restart a new Transaction")
+		client.lock.RUnlock()
+		return
+	}
+	client.lock.RUnlock()
+	if !client.IsTransacting {
 		fmt.Println("Transaction is not initiated.")
 	} else if len(command) != 3 {
 		fmt.Println("Invalid command: " + strings.Join(command, " "))
@@ -128,7 +140,7 @@ func handleSet(client *Client, command []string) {
 				client.TentativeWrite[server][key] = value
 				fmt.Println("OK")
 			} else if reply == "ABORT" {
-				handleAbort()
+				handleAbort(client, false)
 			} else {
 				fmt.Println("Unknown server reply: " + reply)
 			}
@@ -137,9 +149,13 @@ func handleSet(client *Client, command []string) {
 }
 
 func handleGet(client *Client, command []string) {
+	client.lock.RLock()
 	if client.IsAborted {
-		fmt.Println("Abort")
-	} else if !client.IsTransacting {
+		fmt.Println("Transaction is aborted, Please restart a new Transaction")
+		client.lock.RUnlock()
+		return
+	}
+	if !client.IsTransacting {
 		fmt.Println("Transaction is not initiated.")
 	} else if len(command) != 2 {
 		fmt.Println("Invalid command: " + strings.Join(command, " "))
@@ -167,9 +183,10 @@ func handleGet(client *Client, command []string) {
 				content := strings.Split(reply, " ")
 				fmt.Println(content[1] + " = " + content[2])
 			} else if strings.HasPrefix(reply, "ABORT") {
-				handleAbort()
+				handleAbort(client, false)
 			} else if strings.HasPrefix(reply, "NOT FOUND") {
-				handleAbort()
+				fmt.Println("NOT FOUND")
+				handleAbort(client, true)
 			} else {
 				fmt.Println("Unknown server reply: " + reply)
 			}
@@ -177,13 +194,81 @@ func handleGet(client *Client, command []string) {
 	}
 }
 
-func handleCommit() {
+// 1. Actually write 2. Release write lock 3. Release read lock and Clear up 4. increment transactionCount
+func handleCommit(client *Client) {
+	client.lock.RLock()
+	if client.IsAborted {
+		fmt.Println("Transaction is aborted, Please restart a new Transaction")
+		client.lock.RUnlock()
+		return
+	}
+	client.lock.RUnlock()
+
+	client.IsTransacting = false
+	for server, storage := range client.TentativeWrite {
+		for key, value := range storage {
+			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+			// Blocking call, actually write to server
+			makeRPCRequest("Put", server, key, value, transactionID)
+			// release write lock
+			// TODO: consider just it in PUT?
+			makeRPCRequest("Release", server, key, "", transactionID)
+		}
+	}
+	clearUpAndReleaseRead(client)
+	client.TransactionCount++
 	fmt.Println("COMMIT OK")
 }
 
 // NOT FOUND do not need to print "ABORTED"
-func handleAbort() {
-	fmt.Println("ABORTED")
+// User Abort: talk to all server to release lock, clear all tentative write
+// 				if there is any blocking request, server will send Abort mesg to unblock
+// Serve Abort: no race, happend in main thread
+func handleAbort(client *Client, isNotFound bool) {
+	client.lock.RLock()
+	// Abort is in action, do nothing
+	// This case only will happen when user abort because one request is blocked,
+	// and later the blocked request receive abort mesg from server:
+	//		case1: this happen during user abort, will be ignored
+	// 		case2: after user abort, new transaction can't happend until this block call is resovled
+	// 				and the abort mesg will be ignored as well
+	if client.IsAborted {
+		client.lock.RUnlock()
+		return
+	}
+	client.lock.RUnlock()
+	client.IsTransacting = false
+	// change IsAborted, lock it
+	client.lock.Lock()
+	client.IsAborted = true
+	client.lock.Unlock()
+	for server, storage := range client.TentativeWrite {
+		for key := range storage {
+			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+			// release write lock
+			makeRPCRequest("Release", server, key, "", transactionID)
+		}
+	}
+	clearUpAndReleaseRead(client)
+	if !isNotFound {
+		fmt.Println("ABORTED")
+	}
+}
+
+// clear up client local storage and release read lock for the case of commit and abort
+func clearUpAndReleaseRead(client *Client) {
+	// release all readLock
+	for _, lockInfo := range client.ReadLockSet.SetToArray() {
+		transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+		server := strings.Split(lockInfo, ".")[0]
+		key := strings.Split(lockInfo, ".")[1]
+		makeRPCRequest("Release", server, key, "", transactionID)
+	}
+	// clear tentative write, readLockInfo and commandQueue
+	client.TentativeWrite = make(map[string]map[string]string)
+	client.ReadLockSet = shared.NewSet()
+	client.Commands.Clear()
+	// TODO: Clear up to coordinator
 }
 
 func makeRPCRequest(action string, server string, key string, value string, transactionID string) string {
@@ -201,12 +286,10 @@ func makeRPCRequest(action string, server string, key string, value string, tran
 		err = rpcClient.Call("Server.Put", args, &reply)
 	case "Read":
 		err = rpcClient.Call("Server.Read", args, &reply)
-	case "Commit":
-		err = rpcClient.Call("Server.Commit", args, &reply)
-	case "Abort":
-		err = rpcClient.Call("Server.Abort", args, &reply)
+	case "Release":
+		err = rpcClient.Call("Server.ReleaseLock", args, &reply)
 	default:
-		fmt.Println("Unknown rpc request type!")
+		fmt.Println("Unknown rpc request type: " + action)
 	}
 	if err != nil {
 		log.Fatal("Server error:", err)
