@@ -9,13 +9,13 @@ Go 1.11.5
 ## Instructions:
 * Configurations:
     1. Servers:
-      A running at VM01, port 9000
-      B running at VM01, port 9001
-      C running at VM01, port 9002
-      D running at VM01, port 9003
-      E running at VM01, port 9004
+         * A running at VM01, port 9000
+         * B running at VM01, port 9001
+         * C running at VM01, port 9002
+         * D running at VM01, port 9003
+         * E running at VM01, port 9004
     2. Coordinator:
-      Coordinator running at VM02, port 9000		
+           Coordinator running at VM02, port 9000		
 * To build: `go build mp3.go`
 * To run:
   1. Run server: `./mp3 server name port`
