@@ -24,15 +24,14 @@ var ServerMap = map[string]string{
 // Client Node
 // No mutex for client node, most operations are single-thread, except for update queue, which is a thread-safe struct
 type Client struct {
-	Indentifier          string
-	IsTransacting        bool
-	IsAborted            bool
-	TransactionCount     int
-	Commands             *shared.CommandQueue
-	TentativeWrite       map[string]map[string]string
-	ReadLockSet          *shared.StringSet
-	BlockedOperationChan chan bool
-	lock                 sync.RWMutex
+	Indentifier      string
+	IsTransacting    bool
+	IsAborted        bool
+	TransactionCount int
+	Commands         *shared.CommandQueue
+	TentativeWrite   map[string]map[string]string
+	ReadLockSet      *shared.StringSet
+	lock             sync.RWMutex
 }
 
 func newClient(name string) *Client {
@@ -283,7 +282,7 @@ func makeRPCRequest(action string, server string, key string, value string, tran
 	case "TryPut":
 		err = rpcClient.Call("Server.WriterLock", args, &reply)
 	case "Put":
-		err = rpcClient.Call("Server.Put", args, &reply)
+		err = rpcClient.Call("Server.Write", args, &reply)
 	case "Read":
 		err = rpcClient.Call("Server.Read", args, &reply)
 	case "Release":
