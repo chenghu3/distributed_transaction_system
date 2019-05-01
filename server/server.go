@@ -56,7 +56,7 @@ func NewLockRequest(t string, tid string) *LockRequest {
 	req := new(LockRequest)
 	req.Type = t
 	req.TransactionID = tid
-	req.Channel = make(chan bool)
+	req.Channel = make(chan bool, 1)
 	return req
 }
 
