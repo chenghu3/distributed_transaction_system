@@ -24,10 +24,14 @@ func NewCoordinator() *Coordinator {
 }
 
 func (coordinator *Coordinator) AddTransaction(args *shared.CoordinatorArgs, reply *string) error {
-	coordinator.Transactions[args.From] = coordinator.Graph.MakeNode()
+	_, found := coordinator.Transactions[args.From]
+	if !found {
+		coordinator.Transactions[args.From] = coordinator.Graph.MakeNode()
+	}
 	return nil
 }
 
+// From one transaction to an array of transactions
 func (coordinator *Coordinator) AddWaitEdge(args *shared.CoordinatorArgs, reply *string) error {
 	_, foundFrom := coordinator.Transactions[args.From]
 	if !foundFrom {

@@ -277,6 +277,15 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 	return nil
 }
 
+func (server *Server) checkDeadlock(obj Object, req LockRequest) bool {
+	if obj.Readers.Size() > 0 {
+		for _, reader := range obj.Readers.SetToArray() {
+
+		}
+	}
+
+}
+
 // Write : write updated value
 func (server *Server) Write(args *shared.Args, reply *string) error {
 	obj, found := server.Objects[args.Key]
