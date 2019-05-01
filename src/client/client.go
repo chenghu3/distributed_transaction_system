@@ -216,13 +216,10 @@ func handleCommit(client *Client) {
 	for server, storage := range client.TentativeWrite {
 		for key, value := range storage {
 			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
-			fmt.Println("handleCommit: calling PUT RELEASE ")
 			// Blocking call, actually write to server
 			makeRPCRequest("Put", server, key, value, transactionID)
-			fmt.Println("handleCommit: PUT returned")
 			// release write lock
 			makeRPCRequest("Release", server, key, "", transactionID)
-			fmt.Println("handleCommit: RELEASE returned")
 		}
 	}
 	clearUpAndReleaseRead(client)
