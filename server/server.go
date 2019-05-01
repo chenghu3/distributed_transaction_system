@@ -64,21 +64,30 @@ func NewLockRequest(t string, tid string) *LockRequest {
 func (server *Server) ReleaseLock(args *shared.Args, reply *string) error {
 	obj, found := server.Objects[args.Key]
 	if !found {
-		return errors.New("ReleaseLock: Object key=" + args.Key + " not found")
+		fmt.Println("ReleaseLock: Object key=" + args.Key + " not found")
+		return nil
 	}
 
 	obj.m.Lock()
-	isReader := obj.Readers.SetDelete(args.TransactionID)
+	obj.Readers.SetDelete(args.TransactionID)
 
 	isWriter := obj.Writer == args.TransactionID
 	fmt.Println("Writer is: ", obj.Writer)
 	fmt.Println("TransactionID is: ", args.TransactionID)
-	if !isReader && !isWriter {
-		obj.m.Unlock()
-		return errors.New("ReleaseLock: Object key=" + args.Key + " not locked by transaction " + args.TransactionID)
-	}
+	// if !isReader && !isWriter {
+	// 	obj.m.Unlock()
+	// 	// return errors.New("ReleaseLock: Object key=" + args.Key + " not locked by transaction " + args.TransactionID)
+	// }
 	if isWriter {
 		obj.Writer = ""
+	}
+	// Case: user decide to abort themself, remove queued request from waitQueue and send abort to user blocked request
+	for index, queuedReq := range obj.RequestQueue {
+		if queuedReq.TransactionID == args.TransactionID {
+			queuedReq.Channel <- false
+			obj.RequestQueue = append(obj.RequestQueue[:index], obj.RequestQueue[index+1:]...)
+			break // There is at most one queued req for a transaction
+		}
 	}
 	*reply = "SUCCESS"
 
@@ -248,7 +257,9 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 		obj.RequestQueue = append(obj.RequestQueue, req)
 		obj.m.Unlock()
 		// Wait for grant/abort
+		fmt.Println("No readers, has writer: blocked")
 		ok := <-req.Channel
+		fmt.Println("No readers, has writer: Unblocked")
 		if ok {
 			*reply = "SUCCESS " + server.ID + "." + args.Key + " " + obj.Value
 		} else {
@@ -269,7 +280,8 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 // Write : write updated value
 func (server *Server) Write(args *shared.Args, reply *string) error {
 	obj, found := server.Objects[args.Key]
-
+	*reply = "SUCCESS"
+	fmt.Println("Write: TransactionID is: ", args.TransactionID)
 	if !found {
 		newObj := NewObject(args.Value)
 		server.Objects[args.Key] = newObj
@@ -308,42 +320,6 @@ func StartServer(serverID string, port string) {
 			fmt.Println("Accept Error")
 			continue
 		}
-		rpc.ServeConn(conn)
+		go rpc.ServeConn(conn)
 	}
 }
-
-// Set : Perform the update (on commit)
-// func (server *Server) Set(args *shared.Args, reply *string) error {
-
-// 	return nil
-// }
-
-// func (server *Server) Commit(args *shared.Args, reply *string) error {
-
-// 	return nil
-// }
-
-// func (server *Server) Abort(args *shared.Args, reply *string) error {
-
-// 	return nil
-// }
-
-// type Quotient struct {
-// 	Quo, Rem int
-// }
-
-// type Arith int
-
-// func (t *Arith) Multiply(args *Args, reply *int) error {
-// 	*reply = args.A * args.B
-// 	return nil
-// }
-
-// func (t *Arith) Divide(args *Args, quo *Quotient) error {
-// 	if args.B == 0 {
-// 		return errors.New("divide by zero")
-// 	}
-// 	quo.Quo = args.A / args.B
-// 	quo.Rem = args.A % args.B
-// 	return nil
-// }
