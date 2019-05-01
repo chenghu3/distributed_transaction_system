@@ -147,6 +147,11 @@ type Args struct {
 	TransactionID string
 }
 
+type CoordinatorArgs struct {
+	From string
+	To   []string
+}
+
 // GetLocalIP returns the non loopback local IP of the host
 // Reference https://stackoverflow.com/questions/23558425/how-do-i-get-the-local-ip-address-in-go
 func GetLocalIP() string {
