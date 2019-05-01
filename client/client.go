@@ -21,8 +21,6 @@ var ServerMap = map[string]string{
 	"D": "sp19-cs425-g10-01.cs.illinois.edu:9003",
 	"E": "sp19-cs425-g10-01.cs.illinois.edu:9004"}
 
-const coordinatorAddr = "sp19-cs425-g10-02.cs.illinois.edu:9000"
-
 // Client Node
 // No mutex for client node, most operations are single-thread, except for update queue, which is a thread-safe struct
 type Client struct {
@@ -99,7 +97,7 @@ func handleBegin(client *Client) {
 	client.IsAborted = false
 	client.lock.Unlock()
 	transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
-	makeRPCRequestToCoordinator("BEGIN", transactionID)
+	shared.MakeRPCRequestToCoordinator("BEGIN", transactionID, []string{})
 	fmt.Println("OK")
 }
 
@@ -282,7 +280,7 @@ func clearUpAndReleaseRead(client *Client) {
 	client.Commands.Clear()
 	// Clear up to coordinator
 	transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
-	makeRPCRequestToCoordinator("REMOVE", transactionID)
+	shared.MakeRPCRequestToCoordinator("REMOVE", transactionID, []string{})
 }
 
 func makeRPCRequest(action string, server string, key string, value string, transactionID string) string {
@@ -307,28 +305,6 @@ func makeRPCRequest(action string, server string, key string, value string, tran
 	}
 	if err != nil {
 		log.Fatal("Server error:", err)
-	}
-	rpcClient.Close()
-	return reply
-}
-
-func makeRPCRequestToCoordinator(action string, transactionID string) string {
-	rpcClient, err := rpc.Dial("tcp", coordinatorAddr)
-	if err != nil {
-		log.Fatal("dialing:", err)
-	}
-	args := &shared.CoordinatorArgs{From: transactionID, To: []string{}}
-	var reply string
-	switch action {
-	case "BEGIN":
-		err = rpcClient.Call("Coordinator.AddTransaction", args, &reply)
-	case "REMOVE":
-		err = rpcClient.Call("Coordinator.RemoveTransaction", args, &reply)
-	default:
-		fmt.Println("Unknown Coordinator rpc request type: " + action)
-	}
-	if err != nil {
-		log.Fatal("Coordinator error:", err)
 	}
 	rpcClient.Close()
 	return reply

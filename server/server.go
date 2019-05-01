@@ -166,8 +166,13 @@ func (server *Server) WriterLock(args *shared.Args, reply *string) error {
 					// Client transaction is not the only reader
 					// Wait until transaction is the only reader, then promote
 					req := NewLockRequest("promote", args.TransactionID)
-					obj.RequestQueue = append([]*LockRequest{req}, obj.RequestQueue...) // Prepend to queue
+					if server.checkDeadlock(obj, req) {
+						req.Channel <- false
+					} else {
+						obj.RequestQueue = append([]*LockRequest{req}, obj.RequestQueue...) // Prepend to queue
+					}
 					obj.m.Unlock()
+
 					// Wait for grant/abort
 					ok := <-req.Channel
 					if ok {
@@ -179,8 +184,13 @@ func (server *Server) WriterLock(args *shared.Args, reply *string) error {
 			} else {
 				// Client transaction is not reader, wait for releasing of all read locks
 				req := NewLockRequest("write", args.TransactionID)
-				obj.RequestQueue = append(obj.RequestQueue, req)
+				if server.checkDeadlock(obj, req) {
+					req.Channel <- false
+				} else {
+					obj.RequestQueue = append(obj.RequestQueue, req)
+				}
 				obj.m.Unlock()
+
 				// Wait for grant/abort
 				ok := <-req.Channel
 				if ok {
@@ -198,8 +208,13 @@ func (server *Server) WriterLock(args *shared.Args, reply *string) error {
 			return errors.New("Write: Object key=" + args.Key + ", Transaction=" + args.TransactionID + ". Reader-writer conflict.")
 		}
 		req := NewLockRequest("write", args.TransactionID)
-		obj.RequestQueue = append(obj.RequestQueue, req)
+		if server.checkDeadlock(obj, req) {
+			req.Channel <- false
+		} else {
+			obj.RequestQueue = append(obj.RequestQueue, req)
+		}
 		obj.m.Unlock()
+
 		// Wait for grant/abort
 		ok := <-req.Channel
 		if ok {
@@ -241,7 +256,11 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 			obj.m.Unlock()
 		} else {
 			req := NewLockRequest("read", args.TransactionID)
-			obj.RequestQueue = append(obj.RequestQueue, req)
+			if server.checkDeadlock(obj, req) {
+				req.Channel <- false
+			} else {
+				obj.RequestQueue = append(obj.RequestQueue, req)
+			}
 			obj.m.Unlock()
 			// Wait for grant/abort
 			ok := <-req.Channel
@@ -254,7 +273,11 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 	} else if obj.Readers.Size() == 0 && obj.Writer != "" {
 		// No readers, has writer
 		req := NewLockRequest("read", args.TransactionID)
-		obj.RequestQueue = append(obj.RequestQueue, req)
+		if server.checkDeadlock(obj, req) {
+			req.Channel <- false
+		} else {
+			obj.RequestQueue = append(obj.RequestQueue, req)
+		}
 		obj.m.Unlock()
 		// Wait for grant/abort
 		fmt.Println("No readers, has writer: blocked")
@@ -277,13 +300,40 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 	return nil
 }
 
-func (server *Server) checkDeadlock(obj Object, req LockRequest) bool {
+func (server *Server) checkDeadlock(obj *Object, req *LockRequest) bool {
+	destinations := make([]string, 0)
+	// lock holders
 	if obj.Readers.Size() > 0 {
 		for _, reader := range obj.Readers.SetToArray() {
-
+			destinations = append(destinations, reader)
+		}
+	}
+	if obj.Writer != "" {
+		destinations = append(destinations, obj.Writer)
+	}
+	// previously queued transactions
+	if len(obj.RequestQueue) > 0 && req.Type != "promote" {
+		lastIndex := len(obj.RequestQueue) - 1
+		if req.Type == "read" {
+			// ignore reads at the end of queue
+			for lastIndex >= 0 && obj.RequestQueue[lastIndex].Type == "read" {
+				lastIndex--
+			}
+		}
+		for i := 0; i <= lastIndex; i++ {
+			destinations = append(destinations, obj.RequestQueue[i].TransactionID)
 		}
 	}
 
+	shared.MakeRPCRequestToCoordinator("ADDWAITEDGE", req.TransactionID, destinations)
+
+	// RPC Check dead lock, if deadlock, abort
+	reply := shared.MakeRPCRequestToCoordinator("DETECTCYCLE", "", []string{})
+
+	if reply == "CYCLE" {
+		return true
+	}
+	return false
 }
 
 // Write : write updated value

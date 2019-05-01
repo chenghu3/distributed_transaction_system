@@ -1,10 +1,15 @@
 package shared
 
 import (
+	"fmt"
+	"log"
 	"math/rand"
 	"net"
+	"net/rpc"
 	"sync"
 )
+
+const CoordinatorAddr = "sp19-cs425-g10-02.cs.illinois.edu:9000"
 
 // ************************************* //
 // *****  StringSet defination ********* //
@@ -168,4 +173,30 @@ func GetLocalIP() string {
 		}
 	}
 	return ""
+}
+
+func MakeRPCRequestToCoordinator(action string, transactionID string, destinationIDs []string) string {
+	rpcClient, err := rpc.Dial("tcp", CoordinatorAddr)
+	if err != nil {
+		log.Fatal("dialing:", err)
+	}
+	args := &CoordinatorArgs{From: transactionID, To: destinationIDs}
+	var reply string
+	switch action {
+	case "BEGIN":
+		err = rpcClient.Call("Coordinator.AddTransaction", args, &reply)
+	case "REMOVE":
+		err = rpcClient.Call("Coordinator.RemoveTransaction", args, &reply)
+	case "ADDWAITEDGE":
+		err = rpcClient.Call("Coordinator.AddWaitEdge", args, &reply)
+	case "DETECTCYCLE":
+		err = rpcClient.Call("Coordinator.DetectCycle", args, &reply)
+	default:
+		fmt.Println("Unknown Coordinator rpc request type: " + action)
+	}
+	if err != nil {
+		log.Fatal("Coordinator error:", err)
+	}
+	rpcClient.Close()
+	return reply
 }
