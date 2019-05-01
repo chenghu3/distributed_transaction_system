@@ -128,16 +128,20 @@ func handleSet(client *Client, command []string) {
 		}
 		// if key is present is our local tentiveWrite, means client already has the write lock of that object,
 		// no need to make RPC call, just write to local tentiveWrite
-		if _, present := client.TentativeWrite[server][key]; present {
+		if v, present := client.TentativeWrite[server][key]; present && v != "" {
 			client.TentativeWrite[server][key] = value
 			fmt.Println("OK")
 		} else {
+			// Create kv pair in TentativeWrite
+			client.TentativeWrite[server][key] = ""
 			// Make Synchronous RPC call to acquire lock, block client code until receive apply
 			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
 			// Blocking call
 			reply := makeRPCRequest("TryPut", server, key, value, transactionID)
 			// Write lock is granted
 			if reply == "SUCCESS" {
+				client.ReadLockSet.SetDelete(command[1])
+
 				client.TentativeWrite[server][key] = value
 				fmt.Println("OK")
 			} else if reply == "ABORT" {
@@ -156,6 +160,7 @@ func handleGet(client *Client, command []string) {
 		client.lock.RUnlock()
 		return
 	}
+	client.lock.RUnlock()
 	if !client.IsTransacting {
 		fmt.Println("Transaction is not initiated.")
 	} else if len(command) != 2 {
@@ -171,9 +176,10 @@ func handleGet(client *Client, command []string) {
 		}
 		// if key is present is our local tentiveWrite, means client already has the write lock of that object,
 		// no need to make RPC call, just return the current value in local storage
-		if v, present := client.TentativeWrite[server][key]; present {
+		if v, present := client.TentativeWrite[server][key]; present && v != "" {
 			fmt.Println(command[1] + " = " + v)
 		} else {
+			client.ReadLockSet.SetAdd(server + "." + key)
 			// Make Synchronous RPC call to acquire lock, block client code until receive apply
 			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
 			// Blocking call
@@ -209,11 +215,14 @@ func handleCommit(client *Client) {
 	for server, storage := range client.TentativeWrite {
 		for key, value := range storage {
 			transactionID := client.Indentifier + strconv.Itoa(client.TransactionCount)
+			fmt.Println("handleCommit: calling PUT RELEASE ")
 			// Blocking call, actually write to server
 			makeRPCRequest("Put", server, key, value, transactionID)
+			fmt.Println("handleCommit: PUT returned")
 			// release write lock
 			// TODO: consider just it in PUT?
 			makeRPCRequest("Release", server, key, "", transactionID)
+			fmt.Println("handleCommit: RELEASE returned")
 		}
 	}
 	clearUpAndReleaseRead(client)
