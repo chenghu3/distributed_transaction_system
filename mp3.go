@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"./client"
+	"./coordinator"
 	"./server"
 )
 
@@ -27,6 +28,12 @@ func main() {
 			os.Exit(1)
 		}
 		client.StartClient(args[2])
+	case "coordinator":
+		if len(args) != 3 {
+			fmt.Println("Usage error: ./mp3 coordinator port")
+			os.Exit(1)
+		}
+		coordinator.StartCoordinator(args[2])
 	default:
 		fmt.Println("Usage error: Unknow type")
 		os.Exit(1)
