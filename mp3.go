@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"./client"
-	"./coordinator"
-	"./server"
+	"./src/client"
+	"./src/coordinator"
+	"./src/server"
 )
 
 func main() {
