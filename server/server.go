@@ -3,6 +3,9 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log"
+	"net"
+	"net/rpc"
 	"sync"
 
 	"../shared"
@@ -11,14 +14,14 @@ import (
 // Server Node
 type Server struct {
 	ID      string
-	Objects map[string]Object
+	Objects map[string]*Object
 }
 
 // NewServer : Server Node constructor
 func NewServer(id string) *Server {
 	server := new(Server)
 	server.ID = id
-	server.Objects = make(map[string]Object)
+	server.Objects = make(map[string]*Object)
 	return server
 }
 
@@ -109,7 +112,7 @@ func (server *Server) ReleaseLock(args *shared.Args, reply *string) error {
 				req.Channel <- true
 			} else {
 				obj.m.Unlock()
-				return errors.New("ReleaseLock: deadlock while trying to promote")
+				return errors.New("ReleaseLock: promote transactions do not match")
 			}
 		}
 	}
@@ -256,6 +259,51 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 	}
 
 	return nil
+}
+
+// Write : write updated value
+func (server *Server) Write(args *shared.Args, reply *string) error {
+	obj, found := server.Objects[args.Key]
+
+	if !found {
+		newObj := NewObject(args.Value)
+		server.Objects[args.Key] = newObj
+		return nil
+	}
+
+	obj.m.Lock()
+	if obj.Writer != args.TransactionID {
+		fmt.Println("Commit error: the transaction does not have write lock")
+	}
+	obj.Value = args.Value
+	obj.m.Unlock()
+
+	return nil
+}
+
+// StartServer : Start server with serverID at port
+func StartServer(serverID string, port string) {
+	server := NewServer(serverID)
+	rpc.Register(server)
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp", ":"+port)
+	if err != nil {
+		log.Fatal("Error:", err)
+	}
+
+	listener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		log.Fatal("Error:", err)
+	}
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Println("Accept Error")
+			continue
+		}
+		rpc.ServeConn(conn)
+	}
 }
 
 // Set : Perform the update (on commit)
