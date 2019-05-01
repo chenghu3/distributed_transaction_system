@@ -71,6 +71,8 @@ func (server *Server) ReleaseLock(args *shared.Args, reply *string) error {
 	isReader := obj.Readers.SetDelete(args.TransactionID)
 
 	isWriter := obj.Writer == args.TransactionID
+	fmt.Println("Writer is: ", obj.Writer)
+	fmt.Println("TransactionID is: ", args.TransactionID)
 	if !isReader && !isWriter {
 		obj.m.Unlock()
 		return errors.New("ReleaseLock: Object key=" + args.Key + " not locked by transaction " + args.TransactionID)
@@ -213,7 +215,10 @@ func (server *Server) Read(args *shared.Args, reply *string) error {
 	}
 
 	obj.m.Lock()
-	if obj.Writer != "" && obj.Readers.Size() == 0 {
+	fmt.Println("Writer is: ", obj.Writer)
+	fmt.Print("Reader is: ")
+	fmt.Println(obj.Readers.SetToArray())
+	if obj.Writer == "" && obj.Readers.Size() == 0 {
 		// No reader/writer, grant
 		obj.Readers.SetAdd(args.TransactionID)
 		*reply = "SUCCESS " + server.ID + "." + args.Key + " " + obj.Value
@@ -268,6 +273,7 @@ func (server *Server) Write(args *shared.Args, reply *string) error {
 	if !found {
 		newObj := NewObject(args.Value)
 		server.Objects[args.Key] = newObj
+		newObj.Writer = args.TransactionID
 		return nil
 	}
 
