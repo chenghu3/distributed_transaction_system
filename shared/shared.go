@@ -94,20 +94,25 @@ func (set *StringSet) GetRandom() string {
 
 // CommandQueue is queue of client command (thread-safe)
 type CommandQueue struct {
-	Commands []string
-	lock     sync.RWMutex
+	Commands    []string
+	NotifyChann chan bool
+	lock        sync.RWMutex
 }
 
 // NewQueue creates a new CommandQueue
 func NewQueue() *CommandQueue {
 	q := new(CommandQueue)
 	q.Commands = make([]string, 0)
+	q.NotifyChann = make(chan bool, 1)
 	return q
 }
 
 // Push adds an commannd to the end of the queue
 func (q *CommandQueue) Push(c string) {
 	q.lock.Lock()
+	if len(q.Commands) == 0 {
+		q.NotifyChann <- true
+	}
 	q.Commands = append(q.Commands, c)
 	q.lock.Unlock()
 }

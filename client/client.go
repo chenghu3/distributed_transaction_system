@@ -85,6 +85,8 @@ func StartClient(name string) {
 			default:
 				fmt.Println("Invalid command: " + rawCommand)
 			}
+		} else {
+			<-client.Commands.NotifyChann
 		}
 	}
 }
