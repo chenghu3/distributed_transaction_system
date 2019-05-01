@@ -26,6 +26,7 @@ func NewCoordinator() *Coordinator {
 func (coordinator *Coordinator) AddTransaction(args *shared.CoordinatorArgs, reply *string) error {
 	_, found := coordinator.Transactions[args.From]
 	if !found {
+		fmt.Println("Adding new transaction " + args.From)
 		coordinator.Transactions[args.From] = coordinator.Graph.MakeNode()
 	}
 	return nil
@@ -42,6 +43,7 @@ func (coordinator *Coordinator) AddWaitEdge(args *shared.CoordinatorArgs, reply 
 		if !foundTo {
 			return errors.New("AddWaitEdge: Transaction " + to + " not found in coordinator")
 		}
+		fmt.Println("Adding edge from "+args.From, " to "+to)
 		coordinator.Graph.MakeEdge(coordinator.Transactions[args.From], coordinator.Transactions[to])
 	}
 
@@ -53,16 +55,20 @@ func (coordinator *Coordinator) RemoveTransaction(args *shared.CoordinatorArgs, 
 	if !found {
 		return errors.New("RemoveTransaction: Transaction not found in coordinator")
 	}
+	fmt.Println("Removing transaction " + args.From)
 	coordinator.Graph.RemoveNode(&node)
 	delete(coordinator.Transactions, args.From)
 	return nil
 }
 
 func (coordinator *Coordinator) DetectCycle(args *shared.CoordinatorArgs, reply *string) error {
+	fmt.Println("Detecting Cycle")
 	scc := coordinator.Graph.StronglyConnectedComponents()
 	if len(scc) < len(coordinator.Transactions) {
+		fmt.Println("Cycle detected")
 		*reply = "CYCLE"
 	} else {
+		fmt.Println("No cycle")
 		*reply = "NOCYCLE"
 	}
 	return nil
