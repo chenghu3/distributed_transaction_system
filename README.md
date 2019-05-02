@@ -6,6 +6,10 @@ Jianfeng Xia(jxia11), Cheng Hu(chenghu3)
 ## Environment
 Go 1.11.5
 
+## Design & Evaluation
+For details of algorithms & system design and performance evalution, please refer:
+* `docs/CS425_MP3_Report.pdf`
+
 ## Instructions:
 * Configurations:
     1. Servers:
